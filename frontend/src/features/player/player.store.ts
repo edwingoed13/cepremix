@@ -26,33 +26,68 @@ export const usePlayerStore = defineStore('player', () => {
   )
 
   let engine: PlaybackEngine | null = null
+  let ytElementId = 'yt-player'
+  let engineKind: 'audio' | 'youtube' = 'youtube'
+  let triedFallback = false
 
-  function init(elementId: string): void {
-    if (engine) return
-    // Motor por defecto: <audio> (background fiable). 'youtube' (iframe) solo si se pide explícito.
-    const kind = localStorage.getItem('engine') === 'youtube' ? 'youtube' : 'audio'
-    engine = kind === 'youtube' ? new YouTubeEngine(elementId) : new HtmlAudioEngine()
-    engine.setVolume(volume.value)
-    engine.on('status', (s) => {
+  function createEngine(kind: 'audio' | 'youtube'): PlaybackEngine {
+    const e: PlaybackEngine =
+      kind === 'youtube' ? new YouTubeEngine(ytElementId) : new HtmlAudioEngine()
+    e.on('status', (s) => {
       status.value = s
       updateMediaSessionState()
-      // El navegador suele pausar/cue-ar el iframe en segundo plano (sobre todo al
-      // CARGAR una canción nueva). Reintentamos reproducir si esa es la intención.
-      // (Mitigación; el fix durable para background real es audio propio + <audio>.)
+      // El navegador puede pausar/cue-ar el iframe en segundo plano al cargar una
+      // canción nueva: reintentamos reproducir si esa es la intención.
       if ((s === 'paused' || s === 'idle') && wantPlaying.value && document.hidden) engine?.play()
     })
-    engine.on('time', ({ current: c, duration: d }) => {
+    e.on('time', ({ current: c, duration: d }) => {
       position.value = c
       if (d) duration.value = d
     })
-    engine.on('ended', () => next())
-    engine.on('error', () => {
+    e.on('ended', () => next())
+    e.on('error', () => handleEngineError())
+    return e
+  }
+
+  // Si el motor <audio> falla (típico en servidor: /audio da 502 porque YouTube bloquea
+  // la extracción desde IPs de datacenter), caemos al iframe de YouTube, que reproduce
+  // desde el navegador del usuario y funciona en cualquier hosting.
+  function handleEngineError(): void {
+    if (engineKind === 'audio' && !triedFallback) {
+      triedFallback = true
+      engineKind = 'youtube'
+      localStorage.setItem('engine', 'youtube') // recordar para próximas cargas en este origen
+      const track = current.value
+      const pos = position.value
+      const shouldPlay = wantPlaying.value
+      try {
+        engine?.destroy()
+      } catch {
+        /* ignore */
+      }
+      engine = createEngine('youtube')
+      engine.setVolume(volume.value)
+      if (track) {
+        void engine.load(track.id).then(() => {
+          engine?.seek(pos)
+          if (shouldPlay) engine?.play()
+        })
+      }
+    } else {
       status.value = 'error'
-    })
+    }
+  }
+
+  function init(elementId: string): void {
+    if (engine) return
+    ytElementId = elementId
+    // Por defecto <audio> (background + espectro). Si /audio falla, cae al iframe.
+    engineKind = localStorage.getItem('engine') === 'youtube' ? 'youtube' : 'audio'
+    engine = createEngine(engineKind)
+    engine.setVolume(volume.value)
     setupMediaSession()
 
-    // Al volver a la pestaña, reanudar si quedó pausado (p. ej. canción cargada en
-    // segundo plano que el navegador no dejó autoarrancar).
+    // Al volver a la pestaña, reanudar si quedó pausado.
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden && wantPlaying.value && !isPlaying.value) engine?.play()
     })
