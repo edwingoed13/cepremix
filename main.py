@@ -1132,16 +1132,19 @@ def _ytdlp_cookies() -> Optional[str]:
       - YTDLP_COOKIES_FILE: ruta a un archivo (p. ej. un Secret File de Render: /etc/secrets/cookies.txt)
       - YTDLP_COOKIES: el contenido del cookies.txt (se vuelca a /tmp)
     """
-    path = os.getenv("YTDLP_COOKIES_FILE")
-    if path and os.path.isfile(path):
-        return path
+    explicit = os.getenv("YTDLP_COOKIES_FILE")
+    candidates = [explicit] if explicit else []
+    # Rutas típicas donde Render coloca un Secret File llamado "cookies.txt"
+    candidates += ["/etc/secrets/cookies.txt", "cookies.txt", "/opt/render/project/src/cookies.txt"]
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c
     content = os.getenv("YTDLP_COOKIES")
-    if content:
+    if content and content.strip():
         tmp = os.path.join(tempfile.gettempdir(), "yt_cookies.txt")
         try:
-            if not os.path.isfile(tmp):
-                with open(tmp, "w", encoding="utf-8") as f:
-                    f.write(content)
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(content)
             return tmp
         except Exception:
             return None
@@ -1159,11 +1162,18 @@ def _extract_audio_ytdlp(video_id: str) -> Dict[str, Any]:
         "skip_download": True,
     }
     cookies = _ytdlp_cookies()
-    print(f"[AUDIO] extrayendo {video_id} | cookies: {'SÍ (' + cookies + ')' if cookies else 'NO configuradas'}")
     if cookies:
+        print(f"[AUDIO] {video_id} | cookies: SÍ ({cookies})")
         opts["cookiefile"] = cookies
         opts["extractor_args"] = {"youtube": {"player_client": ["web", "android"]}}
     else:
+        print(
+            f"[AUDIO] {video_id} | cookies: NO | "
+            f"YTDLP_COOKIES_FILE={os.getenv('YTDLP_COOKIES_FILE')!r} "
+            f"YTDLP_COOKIES={'set' if os.getenv('YTDLP_COOKIES') else 'unset'} "
+            f"/etc/secrets/cookies.txt={os.path.isfile('/etc/secrets/cookies.txt')} "
+            f"cwd_cookies={os.path.isfile('cookies.txt')}"
+        )
         opts["extractor_args"] = {"youtube": {"player_client": ["android"]}}
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
