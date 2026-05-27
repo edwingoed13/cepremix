@@ -1188,12 +1188,48 @@ def _extract_audio_ytdlp(video_id: str) -> Dict[str, Any]:
         "timestamp": time.time(),
     }
 
+def _extract_audio_pytubefix(video_id: str) -> Dict[str, Any]:
+    """Extrae con pytubefix usando el cliente WEB. Genera un PO token automáticamente
+    (requiere Node.js en el servidor) que a veces evita el anti-bot que tumba a yt-dlp
+    desde IPs de datacenter."""
+    if not PYTUBEFIX_AVAILABLE:
+        raise Exception("pytubefix no disponible")
+    yt = YouTube(f"https://www.youtube.com/watch?v={video_id}", client="WEB")
+    stream = yt.streams.get_audio_only() or yt.streams.filter(only_audio=True).first()
+    if not stream or not stream.url:
+        raise Exception("pytubefix no devolvió stream de audio")
+    return {
+        "stream_url": stream.url,
+        "headers": {"User-Agent": get_random_user_agent()},
+        "content_type": stream.mime_type or "audio/mp4",
+        "timestamp": time.time(),
+    }
+
+def _extract_audio(video_id: str) -> Dict[str, Any]:
+    """Intenta varios métodos de extracción y devuelve el primero que funcione."""
+    errors = []
+    if PYTUBEFIX_AVAILABLE:
+        try:
+            src = _extract_audio_pytubefix(video_id)
+            print(f"[AUDIO] {video_id} | método: pytubefix WEB OK")
+            return src
+        except Exception as e:
+            print(f"[AUDIO] {video_id} | pytubefix falló: {e}")
+            errors.append(f"pytubefix: {e}")
+    try:
+        src = _extract_audio_ytdlp(video_id)
+        print(f"[AUDIO] {video_id} | método: yt-dlp OK")
+        return src
+    except Exception as e:
+        errors.append(f"yt-dlp: {e}")
+    raise Exception(" | ".join(errors) or "sin método de extracción")
+
 async def _get_audio_source(video_id: str) -> Dict[str, Any]:
     async with _audio_cache_lock:
         cached = _audio_cache.get(video_id)
         if cached and time.time() - cached["timestamp"] < 18000:  # ~5h (las URLs expiran)
             return cached
-    src = await asyncio.to_thread(_extract_audio_ytdlp, video_id)
+    src = await asyncio.to_thread(_extract_audio, video_id)
     async with _audio_cache_lock:
         _audio_cache[video_id] = src
     return src
