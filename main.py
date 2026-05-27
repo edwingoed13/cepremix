@@ -1159,6 +1159,7 @@ def _extract_audio_ytdlp(video_id: str) -> Dict[str, Any]:
         "skip_download": True,
     }
     cookies = _ytdlp_cookies()
+    print(f"[AUDIO] extrayendo {video_id} | cookies: {'SÍ (' + cookies + ')' if cookies else 'NO configuradas'}")
     if cookies:
         opts["cookiefile"] = cookies
         opts["extractor_args"] = {"youtube": {"player_client": ["web", "android"]}}
