@@ -56,7 +56,8 @@ export const usePlayerStore = defineStore('player', () => {
     if (engineKind === 'audio' && !triedFallback) {
       triedFallback = true
       engineKind = 'youtube'
-      localStorage.setItem('engine', 'youtube') // recordar para próximas cargas en este origen
+      // No persistimos la elección: así, si /audio vuelve a funcionar (p. ej. al añadir
+      // cookies en el server), al recargar se reintenta <audio> y se auto-recupera.
       const track = current.value
       const pos = position.value
       const shouldPlay = wantPlaying.value

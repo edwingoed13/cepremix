@@ -1,4 +1,4 @@
-import os, json, asyncio, time, math, random
+import os, json, asyncio, time, math, random, tempfile
 from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Body
 from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse, FileResponse, RedirectResponse
@@ -1126,8 +1126,30 @@ async def api_search(q: str, maxResults: int = 30):
 _audio_cache: Dict[str, Dict[str, Any]] = {}
 _audio_cache_lock = asyncio.Lock()
 
+def _ytdlp_cookies() -> Optional[str]:
+    """Ruta a un cookies.txt (formato Netscape) si está configurado, para saltar el
+    bloqueo anti-bot de YouTube en IPs de servidor. Soporta:
+      - YTDLP_COOKIES_FILE: ruta a un archivo (p. ej. un Secret File de Render: /etc/secrets/cookies.txt)
+      - YTDLP_COOKIES: el contenido del cookies.txt (se vuelca a /tmp)
+    """
+    path = os.getenv("YTDLP_COOKIES_FILE")
+    if path and os.path.isfile(path):
+        return path
+    content = os.getenv("YTDLP_COOKIES")
+    if content:
+        tmp = os.path.join(tempfile.gettempdir(), "yt_cookies.txt")
+        try:
+            if not os.path.isfile(tmp):
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.write(content)
+            return tmp
+        except Exception:
+            return None
+    return None
+
 def _extract_audio_ytdlp(video_id: str) -> Dict[str, Any]:
-    """Extrae URL de audio + headers con yt-dlp usando el cliente 'android' (sin PO token)."""
+    """Extrae URL de audio + headers con yt-dlp. Con cookies usa el cliente web
+    autenticado (salta el anti-bot del servidor); sin cookies, el cliente 'android'."""
     import yt_dlp
     opts = {
         "format": "bestaudio/best",
@@ -1135,8 +1157,13 @@ def _extract_audio_ytdlp(video_id: str) -> Dict[str, Any]:
         "no_warnings": True,
         "noplaylist": True,
         "skip_download": True,
-        "extractor_args": {"youtube": {"player_client": ["android"]}},
     }
+    cookies = _ytdlp_cookies()
+    if cookies:
+        opts["cookiefile"] = cookies
+        opts["extractor_args"] = {"youtube": {"player_client": ["web", "android"]}}
+    else:
+        opts["extractor_args"] = {"youtube": {"player_client": ["android"]}}
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
     fmt = info if info.get("url") else (info.get("requested_formats") or [{}])[0]
