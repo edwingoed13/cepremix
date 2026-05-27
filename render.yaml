@@ -1,0 +1,18 @@
+# Render Blueprint — un solo servicio: FastAPI sirve la API y el build del front (Vue).
+services:
+  - type: web
+    name: cepremix
+    runtime: python
+    plan: free
+    buildCommand: |
+      pip install -r requirements.txt
+      npm --prefix frontend install
+      npm --prefix frontend run build
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: STREAMING_MODE
+        value: direct
+      # Configura tu propia clave en el dashboard de Render (no la subas al repo).
+      - key: YOUTUBE_API_KEY
+        sync: false

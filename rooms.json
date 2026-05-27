@@ -1,0 +1,10 @@
+{
+  "default": {
+    "id": "default",
+    "name": "Sala principal",
+    "created_by": null,
+    "is_public": true,
+    "password_hash": null,
+    "queue": []
+  }
+}
