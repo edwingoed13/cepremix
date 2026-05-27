@@ -82,8 +82,9 @@ export const usePlayerStore = defineStore('player', () => {
   function init(elementId: string): void {
     if (engine) return
     ytElementId = elementId
-    // Por defecto <audio> (background + espectro). Si /audio falla, cae al iframe.
-    engineKind = localStorage.getItem('engine') === 'youtube' ? 'youtube' : 'audio'
+    // Siempre intentamos <audio> primero (background + espectro). Si /audio falla
+    // (p. ej. server sin cookies), createEngine cae al iframe por esta sesión.
+    engineKind = 'audio'
     engine = createEngine(engineKind)
     engine.setVolume(volume.value)
     setupMediaSession()

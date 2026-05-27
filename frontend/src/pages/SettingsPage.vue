@@ -1,18 +1,12 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { Sun, Moon, Waves, BarChart3 } from 'lucide-vue-next'
+import { Sun, Moon, BarChart3 } from 'lucide-vue-next'
 import { theme, toggleTheme } from '@/shared/lib/theme'
 import { useUiStore } from '@/shared/lib/ui.store'
 import { usePlayerStore } from '@/features/player/player.store'
 
 const ui = useUiStore()
 const player = usePlayerStore()
-const audioEngine = ref(localStorage.getItem('engine') !== 'youtube')
-function toggleEngine(): void {
-  audioEngine.value = !audioEngine.value
-  localStorage.setItem('engine', audioEngine.value ? 'audio' : 'youtube')
-  ui.toast('Recarga la página para aplicar el motor de audio')
-}
 
 const realSpectrum = ref(localStorage.getItem('spectrum') === 'real')
 function toggleSpectrum(): void {
@@ -32,11 +26,6 @@ function toggleSpectrum(): void {
         <component :is="theme === 'dark' ? Moon : Sun" :size="20" />
         <span class="label">Tema</span>
         <span class="val">{{ theme === 'dark' ? 'Oscuro' : 'Claro' }}</span>
-      </li>
-      <li class="item" role="button" tabindex="0" @click="toggleEngine()" @keydown.enter="toggleEngine()">
-        <Waves :size="20" />
-        <span class="label">Motor de audio (experimental)</span>
-        <span class="val">{{ audioEngine ? '<audio> real' : 'YouTube iframe' }}</span>
       </li>
       <li class="item" role="button" tabindex="0" @click="toggleSpectrum()" @keydown.enter="toggleSpectrum()">
         <BarChart3 :size="20" />
