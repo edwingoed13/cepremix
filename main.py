@@ -799,8 +799,11 @@ accounts.init_db()
 app.include_router(accounts.router)  # /api/auth/*, /api/me/library (antes del catch-all del SPA)
 
 def _is_local_request(request: Request) -> bool:
-    """True solo si la petición sale de la propia PC del servidor (no de la red)."""
-    return (request.client.host if request.client else "") in ("127.0.0.1", "::1", "localhost")
+    """True solo si la petición sale de la propia PC del servidor (no de la red ni de internet).
+    Ojo: con Cloudflare Tunnel TODO llega desde 127.0.0.1 (cloudflared corre en esta PC),
+    así que una petición que trae cabeceras de proxy viene de fuera aunque parezca local."""
+    proxied = any(h in request.headers for h in ("cf-connecting-ip", "cf-ray", "x-forwarded-for", "forwarded"))
+    return not proxied and (request.client.host if request.client else "") in ("127.0.0.1", "::1", "localhost")
 
 # Configurar CORS. Nota: allow_credentials NO puede ser True junto con allow_origins="*"
 # (los navegadores lo rechazan). La app no usa cookies, así que va en False.
