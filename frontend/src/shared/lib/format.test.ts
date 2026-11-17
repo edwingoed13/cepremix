@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { mmss, parseDurationLabel } from './format'
-import { extractVideoId } from './youtube'
+import { extractVideoId, isLetterboxed } from './youtube'
 
 describe('mmss', () => {
   it('formatea segundos como m:ss', () => {
@@ -10,6 +10,19 @@ describe('mmss', () => {
   })
   it('nunca devuelve negativos', () => {
     expect(mmss(-10)).toBe('0:00')
+  })
+  it('usa h:mm:ss desde una hora (mixes largos)', () => {
+    expect(mmss(3600)).toBe('1:00:00')
+    expect(mmss(15299)).toBe('4:14:59')
+  })
+})
+
+describe('isLetterboxed', () => {
+  it('detecta miniaturas 4:3 con bandas negras', () => {
+    expect(isLetterboxed('https://i.ytimg.com/vi/abc/hqdefault.jpg')).toBe(true)
+    expect(isLetterboxed('https://i.ytimg.com/vi/abc/sddefault.jpg?x=1')).toBe(true)
+    expect(isLetterboxed('https://i.ytimg.com/vi/abc/mqdefault.jpg')).toBe(false)
+    expect(isLetterboxed(undefined)).toBe(false)
   })
 })
 

@@ -2,6 +2,7 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import { VueQueryPlugin } from '@tanstack/vue-query'
 import './style.css'
+import '@/shared/lib/theme' // aplica el tema guardado al arrancar (antes solo al abrir Perfil)
 import App from '@/app/App.vue'
 import { router } from '@/app/router'
 

@@ -3,42 +3,78 @@
 /* ============================================================
    Design tokens — dark-first. Cambiar tema = cambiar data-theme.
    Nunca hardcodear color en componentes: usar siempre var(--*).
+
+   Lenguaje visual (mezcla):
+   - Spotify: base casi negra, acento verde, botón play flotante, filas densas.
+   - Apple Music: títulos grandes, vidrio esmerilado, carátula "viva" en el player.
+   - YouTube Music: chips de estado de ánimo, "Selección rápida" en columnas.
    ============================================================ */
 :root,
 [data-theme='dark'] {
-  --bg: #0e0e11;
-  --surface: #17171c;
-  --surface-2: #21212a;
-  --text: #f4f4f6;
-  --text-muted: #a0a0ab;
+  --bg: #0a0a0c;
+  --bg-elev: #111114;
+  --surface: #16161a;
+  --surface-2: #1f1f25;
+  --surface-3: #2a2a31;
+  --text: #f5f5f7;
+  --text-muted: #a1a1aa;
+  --text-subtle: #6b6b75;
   --accent: #3dd68c;
   --accent-press: #2cc47b;
+  --accent-ink: #03140b; /* texto/icono sobre el acento (negro, como Spotify) */
   --success: #3dd68c;
   --danger: #ff5c6c;
-  --border: rgba(255, 255, 255, 0.08);
+  --gold: #ffcf4d;
+  --border: rgba(255, 255, 255, 0.07);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --glass: rgba(20, 20, 24, 0.72);
+  --scrim: rgba(10, 10, 12, 0.55);
+  /* Color de ambiente: lo actualiza useAmbientColor() con el arte que suena */
+  --ambient: #2b6e50;
 
+  --radius-xs: 4px;
   --radius-sm: 8px;
   --radius: 12px;
   --radius-lg: 16px;
+  --radius-xl: 22px;
 
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
+  --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
+  --space-10: 40px;
 
-  --tabbar-h: 64px;
-  --mini-h: 64px;
+  --shadow-1: 0 4px 14px rgba(0, 0, 0, 0.35);
+  --shadow-2: 0 16px 40px rgba(0, 0, 0, 0.55);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --tabbar-h: 60px;
+  --mini-h: 60px;
+  /* Fondo real detrás de las páginas (en desktop el panel de contenido es --bg-elev) */
+  --page-bg: var(--bg);
 }
 
 [data-theme='light'] {
   --bg: #ffffff;
-  --surface: #f4f4f6;
-  --surface-2: #e9e9ee;
-  --text: #17171c;
-  --text-muted: #6b6b76;
-  --border: rgba(0, 0, 0, 0.08);
+  --bg-elev: #f7f7f9;
+  --surface: #f2f2f5;
+  --surface-2: #e8e8ed;
+  --surface-3: #dcdce3;
+  --text: #111114;
+  --text-muted: #5f5f6a;
+  --text-subtle: #8e8e98;
+  --accent: #1fb46e;
+  --accent-press: #189a5d;
+  --border: rgba(0, 0, 0, 0.07);
+  --border-strong: rgba(0, 0, 0, 0.14);
+  --glass: rgba(250, 250, 252, 0.78);
+  --scrim: rgba(255, 255, 255, 0.55);
+  --shadow-1: 0 4px 14px rgba(0, 0, 0, 0.08);
+  --shadow-2: 0 16px 40px rgba(0, 0, 0, 0.16);
 }
 
 /* Mapear los tokens a utilidades de Tailwind (bg-bg, text-muted, etc.) */
@@ -72,6 +108,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
+  font-feature-settings: 'cv11', 'ss01';
   overscroll-behavior-y: none;
   -webkit-font-smoothing: antialiased;
 }
@@ -80,59 +117,442 @@ button {
   font-family: inherit;
   cursor: pointer;
 }
+button:focus-visible,
+a:focus-visible,
+[role='button']:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
 img {
   -webkit-user-drag: none;
   user-select: none;
 }
 
-/* ---- Utilidades de layout compartidas por las páginas ---- */
+/* ============================================================
+   Layout de páginas
+   ============================================================ */
 .page {
-  padding: calc(env(safe-area-inset-top) + var(--space-6)) var(--space-4) var(--space-6);
+  position: relative;
+  padding: calc(env(safe-area-inset-top) + var(--space-5)) var(--space-4) var(--space-6);
 }
 .page > section {
   margin-top: var(--space-8);
 }
+
+/* Título grande estilo Apple Music */
+.large-title {
+  margin: 0;
+  font-size: 32px;
+  line-height: 1.1;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+}
 .head h1 {
   margin: 0;
-  font-size: 26px;
-  font-weight: 700;
+  font-size: 32px;
+  line-height: 1.1;
+  font-weight: 800;
+  letter-spacing: -0.025em;
 }
+.subtitle {
+  margin: var(--space-1) 0 0;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
 .sec-head {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
+  gap: var(--space-3);
   margin-bottom: var(--space-3);
 }
 .sec-head h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 700;
+  letter-spacing: -0.015em;
 }
+.sec-head .kicker {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+.sec-link {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-decoration: none;
+  background: none;
+  border: 0;
+  padding: 0;
+}
+.sec-link:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
 .hscroll {
   display: flex;
   gap: var(--space-3);
   overflow-x: auto;
+  /* Sin scroll-snap a propósito: estos carruseles cambian en vivo (salas que llegan,
+     reordenadas por oyentes) y el navegador "re-engancha" al elemento anterior,
+     desplazando la vista sola. */
   scrollbar-width: none;
   margin: 0 calc(-1 * var(--space-4));
-  padding: 0 var(--space-4) var(--space-1);
+  padding: 0 var(--space-4) var(--space-2);
 }
 .hscroll::-webkit-scrollbar {
   display: none;
 }
 
+/* ============================================================
+   Controles compartidos
+   ============================================================ */
+
+/* Chips (YouTube Music / filtros de Spotify) */
+.chips {
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+  margin: 0 calc(-1 * var(--space-4));
+  padding: 0 var(--space-4);
+}
+.chips::-webkit-scrollbar {
+  display: none;
+}
+.chip {
+  flex-shrink: 0;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s, transform 0.15s;
+}
+.chip:hover {
+  background: var(--surface-3);
+}
+.chip:active {
+  transform: scale(0.96);
+}
+.chip.on {
+  background: var(--text);
+  color: var(--bg);
+  border-color: transparent;
+}
+
+/* Botones */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  transition: transform 0.15s, background 0.15s, border-color 0.15s;
+}
+.btn:hover {
+  border-color: var(--text);
+}
+.btn:active {
+  transform: scale(0.96);
+}
+.btn--accent {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-ink);
+}
+.btn--accent:hover {
+  background: var(--accent-press);
+  border-color: transparent;
+}
+.btn--danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+
+.icon-btn {
+  flex-shrink: 0;
+  background: none;
+  border: 0;
+  color: var(--text);
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  transition: background 0.15s, color 0.15s, transform 0.15s;
+}
+.icon-btn:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+.icon-btn:active {
+  transform: scale(0.9);
+}
+.icon-btn.muted {
+  color: var(--text-muted);
+}
+.icon-btn.muted:hover {
+  color: var(--text);
+}
+.icon-btn.on {
+  color: var(--accent);
+}
+.icon-btn:disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+/* Botón de reproducir redondo (verde con icono negro, a lo Spotify) */
+.play-fab {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 0;
+  background: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
+  transition: transform 0.18s var(--ease-spring), background 0.15s;
+}
+.play-fab:hover {
+  transform: scale(1.06);
+  background: var(--accent-press);
+}
+.play-fab:active {
+  transform: scale(0.94);
+}
+
+/* Indicador "en vivo" con pulso */
+.live-dot {
+  position: relative;
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+  flex-shrink: 0;
+}
+.live-dot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: inherit;
+  animation: live-pulse 1.6s ease-out infinite;
+}
+.live-dot.green {
+  background: var(--accent);
+}
+@keyframes live-pulse {
+  from {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  to {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+
+/* Slider de progreso/volumen: pista fina que engorda al pasar (Apple/Spotify).
+   Uso: <input type="range" class="slider" :style="{ '--p': '42%' }"> */
+.slider {
+  --p: 0%;
+  --track: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 16px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.slider::-webkit-slider-runnable-track {
+  height: var(--track);
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--fill, var(--text)) 0 var(--p),
+    color-mix(in srgb, var(--text) 22%, transparent) var(--p) 100%
+  );
+  transition: height 0.12s;
+}
+.slider::-moz-range-track {
+  height: var(--track);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 22%, transparent);
+}
+.slider::-moz-range-progress {
+  height: var(--track);
+  border-radius: 999px;
+  background: var(--fill, var(--text));
+}
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: calc((var(--track) - 12px) / 2);
+  border-radius: 50%;
+  background: var(--text);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--text);
+  opacity: 0;
+}
+.slider:hover,
+.slider:active,
+.slider:focus-visible {
+  --fill: var(--accent);
+  --track: 6px;
+}
+.slider:hover::-webkit-slider-thumb,
+.slider:active::-webkit-slider-thumb {
+  opacity: 1;
+}
+.slider:hover::-moz-range-thumb,
+.slider:active::-moz-range-thumb {
+  opacity: 1;
+}
+/* En táctil siempre mostramos el thumb (no hay hover) */
+@media (hover: none) {
+  .slider::-webkit-slider-thumb {
+    opacity: 1;
+  }
+  .slider::-moz-range-thumb {
+    opacity: 1;
+  }
+}
+
+/* Inputs de texto */
+.field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 46px;
+  padding: 0 var(--space-3);
+  background: var(--surface-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  transition: border-color 0.15s, background 0.15s;
+}
+.field:focus-within {
+  border-color: var(--border-strong);
+  background: var(--surface-3);
+}
+.field input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: 0;
+  outline: none;
+  color: var(--text);
+  font-size: 15px;
+  font-family: inherit;
+}
+.field input::placeholder {
+  color: var(--text-subtle);
+}
+
+/* Miniatura 4:3 de YouTube con bandas negras: ampliar para recortarlas.
+   Requiere un contenedor con overflow:hidden. Usa `scale` (no `transform`) para
+   poder combinarse con los transform de hover/pausa de cada componente. */
+img.lb {
+  scale: 1.34;
+}
+
+/* Listas */
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Skeletons */
+.skel {
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  animation: skel-pulse 1.2s ease-in-out infinite;
+}
+@keyframes skel-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* Transición entre páginas */
+.page-enter-active,
+.page-leave-active {
+  transition:
+    opacity 0.18s ease,
+    transform 0.22s var(--ease-out);
+}
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.page-leave-to {
+  opacity: 0;
+}
+
 /* ---- Ajustes para desktop (≥1024px) ---- */
 @media (min-width: 1024px) {
   .page {
-    padding: var(--space-8) var(--space-8) var(--space-6);
-    max-width: 1280px;
+    padding: var(--space-6) var(--space-8) var(--space-10);
+    max-width: 1400px;
   }
+  .large-title,
   .head h1 {
-    font-size: 30px;
+    font-size: 40px;
   }
-  /* En desktop hay hover: realza tarjetas y filas */
+  .sec-head h2 {
+    font-size: 22px;
+  }
   .hscroll {
     gap: var(--space-4);
+    margin: 0 calc(-1 * var(--space-8));
+    padding: 0 var(--space-8) var(--space-2);
+  }
+  .chips {
+    margin: 0;
+    padding: 0;
+    flex-wrap: wrap;
   }
 }
 

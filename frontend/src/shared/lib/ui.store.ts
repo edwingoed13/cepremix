@@ -9,6 +9,12 @@ interface Toast {
 interface PromptRequest {
   title: string
   placeholder: string
+  /** text = pide un texto · confirm = solo Aceptar/Cancelar */
+  kind: 'text' | 'confirm'
+  inputType?: 'text' | 'password'
+  message?: string
+  confirmLabel?: string
+  danger?: boolean
   resolve: (value: string | null) => void
 }
 
@@ -26,9 +32,28 @@ export const useUiStore = defineStore('ui', () => {
 
   // Prompt de texto como Promise (sustituye a window.prompt)
   const prompt = ref<PromptRequest | null>(null)
-  function promptText(title: string, placeholder = ''): Promise<string | null> {
+  function promptText(
+    title: string,
+    placeholder = '',
+    opts: { inputType?: 'text' | 'password'; confirmLabel?: string } = {},
+  ): Promise<string | null> {
     return new Promise((resolve) => {
-      prompt.value = { title, placeholder, resolve }
+      prompt.value = { title, placeholder, kind: 'text', ...opts, resolve }
+    })
+  }
+  // Confirmación como Promise<boolean> (sustituye a window.confirm)
+  function confirmAction(
+    title: string,
+    opts: { message?: string; confirmLabel?: string; danger?: boolean } = {},
+  ): Promise<boolean> {
+    return new Promise((resolve) => {
+      prompt.value = {
+        title,
+        placeholder: '',
+        kind: 'confirm',
+        ...opts,
+        resolve: (v) => resolve(v !== null),
+      }
     })
   }
   function resolvePrompt(value: string | null): void {
@@ -50,6 +75,7 @@ export const useUiStore = defineStore('ui', () => {
     toast,
     prompt,
     promptText,
+    confirmAction,
     resolvePrompt,
     addTarget,
     openAddToPlaylist,

@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { Play, Pause, SkipForward } from 'lucide-vue-next'
 import { usePlayerStore } from './player.store'
+import { useRoomStore } from '@/features/rooms/room.store'
 import MarqueeText from '@/shared/ui/MarqueeText.vue'
 
 const player = usePlayerStore()
+const room = useRoomStore()
 </script>
 
 <template>
@@ -15,12 +17,13 @@ const player = usePlayerStore()
     @click="player.openFull()"
     @keydown.enter="player.openFull()"
   >
-    <div class="bar"><div class="bar-fill" :style="{ width: player.progress * 100 + '%' }" /></div>
-
     <img class="art" :src="player.current?.thumbnail" :alt="player.current?.title" />
     <div class="meta">
       <MarqueeText class="title" :text="player.current?.title ?? ''" />
-      <p class="artist">{{ player.current?.artist }}</p>
+      <p v-if="room.active" class="artist room">
+        <span class="live-dot green" /> {{ room.roomName || 'Sala' }}
+      </p>
+      <p v-else class="artist">{{ player.current?.artist }}</p>
     </div>
 
     <button
@@ -28,11 +31,13 @@ const player = usePlayerStore()
       :aria-label="player.isPlaying ? 'Pausar' : 'Reproducir'"
       @click.stop="player.toggle()"
     >
-      <component :is="player.isPlaying ? Pause : Play" :size="22" fill="currentColor" />
+      <component :is="player.isPlaying ? Pause : Play" :size="24" fill="currentColor" />
     </button>
     <button class="ctrl" aria-label="Siguiente" @click.stop="player.next()">
       <SkipForward :size="22" fill="currentColor" />
     </button>
+
+    <div class="bar"><div class="bar-fill" :style="{ width: player.progress * 100 + '%' }" /></div>
   </div>
 </template>
 
@@ -41,55 +46,56 @@ const player = usePlayerStore()
   position: fixed;
   left: var(--space-2);
   right: var(--space-2);
-  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + var(--space-1));
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 2px);
   z-index: 45;
   display: flex;
   align-items: center;
   gap: var(--space-3);
   height: var(--mini-h);
-  padding: var(--space-2) var(--space-3);
-  background: var(--surface-2);
+  padding: 0 var(--space-2) 0 var(--space-2);
+  /* Cápsula de vidrio teñida con el color de la carátula */
+  background: color-mix(in srgb, var(--ambient) 32%, var(--glass));
+  backdrop-filter: blur(24px) saturate(1.6);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  box-shadow: var(--shadow-2);
   overflow: hidden;
+  transition: background 0.8s ease;
 }
-.bar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: var(--border);
-}
-.bar-fill {
-  height: 100%;
-  background: var(--accent);
-  transition: width 0.25s linear;
+.mini:active {
+  transform: scale(0.99);
 }
 .art {
   width: 44px;
   height: 44px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
   object-fit: cover;
   flex-shrink: 0;
+  box-shadow: var(--shadow-1);
 }
 .meta {
   flex: 1;
   min-width: 0;
 }
+.title {
+  font-size: 14px;
+  font-weight: 700;
+}
 .artist {
-  margin: 0;
+  margin: 1px 0 0;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--text) 70%, transparent);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.title {
-  font-size: 14px;
-  font-weight: 600;
-}
-.artist {
-  font-size: 12px;
-  color: var(--text-muted);
+.artist.room {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+  font-weight: 700;
 }
 .ctrl {
   flex-shrink: 0;
@@ -98,11 +104,26 @@ const player = usePlayerStore()
   color: var(--text);
   display: grid;
   place-items: center;
-  width: 40px;
-  height: 40px;
+  width: 42px;
+  height: 42px;
   border-radius: 50%;
 }
 .ctrl:active {
-  transform: scale(0.9);
+  transform: scale(0.88);
+}
+.bar {
+  position: absolute;
+  left: var(--space-2);
+  right: var(--space-2);
+  bottom: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 18%, transparent);
+  overflow: hidden;
+}
+.bar-fill {
+  height: 100%;
+  background: var(--text);
+  transition: width 0.25s linear;
 }
 </style>

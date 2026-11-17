@@ -1,7 +1,7 @@
-import os, json, asyncio, time, math, random, tempfile
+import os, re, json, asyncio, time, math, random, tempfile, hashlib, hmac, secrets
 from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Body
-from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse, FileResponse, RedirectResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse, FileResponse, RedirectResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from collections import defaultdict
@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 # Implementación liviana sin descargas - solo gestión de colas
 from youtube_search import YoutubeSearch
 import bcrypt
+import accounts  # cuentas de usuario + biblioteca por usuario (SQLite)
 
 # Importaciones de pytubefix (comentadas temporalmente hasta instalar)
 try:
@@ -469,16 +470,20 @@ class PlayerState:
 # ---- Room System ----
 class Room:
     def __init__(self, room_id: str, name: str = "", created_by: Optional[str] = None,
-                 is_public: bool = True, password_hash: Optional[str] = None):
+                 is_public: bool = True, password_hash: Optional[str] = None,
+                 owner_token_hash: Optional[str] = None):
         self.id = room_id
         self.name = name or f"Room {room_id}"
-        self.created_by = created_by  # user_id del creador
+        self.created_by = created_by  # user_id del creador (público: solo sirve para mostrar el host)
         self.is_public = is_public  # True = pública, False = privada
         self.password_hash = password_hash  # Hash bcrypt de la contraseña (solo para privadas)
+        # SHA-256 del token secreto que recibe solo el creador; es lo que autoriza a borrar la sala.
+        self.owner_token_hash = owner_token_hash
         self.queue: List[str] = []
         self.player = PlayerState()
         self.connections: set[WebSocket] = set()
         self.members: Dict[WebSocket, str] = {}  # ws -> user_id (presencia en la sala)
+        self.names: Dict[str, str] = {}  # user_id -> nombre visible (solo usuarios con cuenta)
         self.state_lock = asyncio.Lock()
         self.queue_lock = asyncio.Lock()
 
@@ -497,7 +502,14 @@ class Room:
             "positionLabel": mmss(pos),
             "duration": (cur or {}).get("seconds", 0),
             "durationLabel": mmss((cur or {}).get("seconds", 0)),
-            "current": {"id": cur["id"], "title": cur["title"]} if cur else None,
+            # artist/thumbnail: el que suena ya no está en la cola, así el cliente puede pintarlo bien
+            "current": {
+                "id": cur["id"],
+                "title": cur["title"],
+                "artist": cur.get("uploader"),
+                "thumbnail": cur.get("thumbnail"),
+                "seconds": cur.get("seconds"),
+            } if cur else None,
         }
 
     async def broadcast(self, payload: Dict[str, Any]):
@@ -533,7 +545,8 @@ async def get_or_create_room(room_id: str, user_id: Optional[str] = None,
                     room_data.get("name", ""),
                     room_data.get("created_by"),
                     room_data.get("is_public", True),
-                    room_data.get("password_hash")
+                    room_data.get("password_hash"),
+                    room_data.get("owner_token_hash"),
                 )
                 room.queue = room_data.get("queue", [])
             else:
@@ -562,9 +575,31 @@ async def save_room_state(room: Room):
             "created_by": room.created_by,
             "is_public": room.is_public,
             "password_hash": room.password_hash,
+            "owner_token_hash": room.owner_token_hash,
             "queue": room.queue
         }
         rooms_write(all_rooms)
+
+def _hash_owner_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+def _room_live_info(room_id: str, is_public: bool) -> Dict[str, Any]:
+    """Datos 'en vivo' para las tarjetas de sala: oyentes conectados y qué suena.
+    En salas privadas no se expone qué suena."""
+    live = rooms.get(room_id)
+    if not live:
+        return {"listeners": 0, "now_playing": None}
+    now_playing = None
+    if is_public and live.player.current_id:
+        cur = db_read().get(live.player.current_id)
+        if cur:
+            now_playing = {
+                "id": cur["id"],
+                "title": cur.get("title"),
+                "artist": cur.get("uploader"),
+                "thumbnail": cur.get("thumbnail") or f"https://i.ytimg.com/vi/{cur['id']}/hqdefault.jpg",
+            }
+    return {"listeners": len(live.connections), "now_playing": now_playing}
 
 # ---- Helpers de cola / reproducción por Room ----
 async def room_enqueue_track(room: Room, track_id: str):
@@ -600,6 +635,7 @@ async def room_broadcast_presence(room: Room):
         "count": len(members),
         "listeners": members,
         "host": room.created_by,
+        "names": {m: room.names[m] for m in members if m in room.names},
     }})
 
 async def room_maybe_autostart_internal(room: Room):
@@ -741,6 +777,13 @@ async def ticker():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Servidor de oficina en Windows: impedir que la PC se suspenda MIENTRAS el servidor
+    # corre (la pantalla sí puede apagarse). Lo activa scripts/servidor-oficina.ps1.
+    if os.name == "nt" and os.getenv("KEEP_AWAKE") == "1":
+        import ctypes
+        ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+        print("[STARTUP] KEEP_AWAKE: la PC no se suspenderá mientras el servidor esté encendido")
     # Arranque: lanzar tareas de fondo (reemplaza el deprecado @app.on_event("startup"))
     ticker_task = asyncio.create_task(ticker())
     cleanup_task = asyncio.create_task(cleanup_old_sessions())
@@ -752,6 +795,12 @@ async def lifespan(app: FastAPI):
         cleanup_task.cancel()
 
 app = FastAPI(title="Music Realtime FastAPI", lifespan=lifespan)
+accounts.init_db()
+app.include_router(accounts.router)  # /api/auth/*, /api/me/library (antes del catch-all del SPA)
+
+def _is_local_request(request: Request) -> bool:
+    """True solo si la petición sale de la propia PC del servidor (no de la red)."""
+    return (request.client.host if request.client else "") in ("127.0.0.1", "::1", "localhost")
 
 # Configurar CORS. Nota: allow_credentials NO puede ser True junto con allow_origins="*"
 # (los navegadores lo rechazan). La app no usa cookies, así que va en False.
@@ -832,8 +881,10 @@ def api_tracks():
     return list(db_read().values())
 
 @app.post("/api/admin/clear-cache")
-def api_clear_cache(track_ids: List[str] = Body(default=[])):
+def api_clear_cache(request: Request, track_ids: List[str] = Body(default=[])):
     """Limpia el cache de tracks específicos o todos si no se especifican"""
+    if not _is_local_request(request):  # administración solo desde la PC del servidor
+        return JSONResponse({"error": "Solo disponible desde el servidor"}, status_code=403)
     db = db_read()
 
     if not track_ids:
@@ -856,7 +907,9 @@ def api_clear_cache(track_ids: List[str] = Body(default=[])):
         return {"message": f"Cache limpiado: {cleared} tracks eliminados"}
 
 @app.post("/api/admin/reset-bot-detection")
-def api_reset_bot_detection():
+def api_reset_bot_detection(request: Request):
+    if not _is_local_request(request):
+        return JSONResponse({"error": "Solo disponible desde el servidor"}, status_code=403)
     """Resetea el contador de detección de bot manualmente"""
     global bot_detection_count, last_bot_detection
     old_count = bot_detection_count
@@ -1125,6 +1178,10 @@ async def api_search(q: str, maxResults: int = 30):
 # de extraer el stream en el servidor (sujeto a límites de YouTube).
 _audio_cache: Dict[str, Dict[str, Any]] = {}
 _audio_cache_lock = asyncio.Lock()
+# AUDIO_PROXY=off desactiva /audio (responde 503 al instante). Útil en hostings con IP de
+# datacenter (Render), donde YouTube bloquea SIEMPRE la extracción: así el cliente cae al
+# iframe de inmediato en vez de esperar ~20 s a que falle cada intento.
+AUDIO_PROXY_ENABLED = os.getenv("AUDIO_PROXY", "on").strip().lower() not in ("off", "0", "false", "no")
 
 def _ytdlp_cookies() -> Optional[str]:
     """Ruta a un cookies.txt (formato Netscape) si está configurado, para saltar el
@@ -1151,40 +1208,44 @@ def _ytdlp_cookies() -> Optional[str]:
     return None
 
 def _extract_audio_ytdlp(video_id: str) -> Dict[str, Any]:
-    """Extrae URL de audio + headers con yt-dlp. Con cookies usa el cliente web
-    autenticado (salta el anti-bot del servidor); sin cookies, el cliente 'android'."""
+    """Extrae URL de audio + headers con yt-dlp (>= 2026.10, ver requirements.txt).
+
+    Notas (probado 2026-11-05 desde IP residencial):
+    - Clientes por defecto de yt-dlp (hoy 'tv'): dan m4a reproducible, pero YouTube exige
+      resolver un reto JavaScript -> necesita un runtime JS (Deno o Node) + yt-dlp-ejs.
+    - 'android_vr'/'android' ya exigen PO token: googlevideo corta con 403 tras ~1 MB.
+    - La URL no es válida hasta `available_at` (~5 s): antes responde 403. Esperamos aquí.
+    """
     import yt_dlp
     opts = {
-        "format": "bestaudio/best",
+        # m4a (AAC) primero: lo reproduce cualquier navegador, incluido Safari/iOS
+        "format": "bestaudio[ext=m4a]/bestaudio/best",
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         "skip_download": True,
+        "js_runtimes": {"deno": {}, "node": {}},
     }
     cookies = _ytdlp_cookies()
     if cookies:
         print(f"[AUDIO] {video_id} | cookies: SÍ ({cookies})")
         opts["cookiefile"] = cookies
-        opts["extractor_args"] = {"youtube": {"player_client": ["web", "android"]}}
-    else:
-        print(
-            f"[AUDIO] {video_id} | cookies: NO | "
-            f"YTDLP_COOKIES_FILE={os.getenv('YTDLP_COOKIES_FILE')!r} "
-            f"YTDLP_COOKIES={'set' if os.getenv('YTDLP_COOKIES') else 'unset'} "
-            f"/etc/secrets/cookies.txt={os.path.isfile('/etc/secrets/cookies.txt')} "
-            f"cwd_cookies={os.path.isfile('cookies.txt')}"
-        )
-        opts["extractor_args"] = {"youtube": {"player_client": ["android"]}}
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
     fmt = info if info.get("url") else (info.get("requested_formats") or [{}])[0]
     url = fmt.get("url")
     if not url:
         raise Exception("yt-dlp no devolvió URL de audio")
+    available_at = fmt.get("available_at") or info.get("available_at")
+    if available_at:
+        wait = float(available_at) - time.time()
+        if 0 < wait < 30:
+            time.sleep(wait + 0.3)  # corre en un hilo (asyncio.to_thread): no bloquea el loop
     return {
         "stream_url": url,
         "headers": fmt.get("http_headers") or {},
         "content_type": f"audio/{fmt.get('ext', 'mp4')}",
+        "ext": fmt.get("ext") or "m4a",
         "timestamp": time.time(),
     }
 
@@ -1206,8 +1267,17 @@ def _extract_audio_pytubefix(video_id: str) -> Dict[str, Any]:
     }
 
 def _extract_audio(video_id: str) -> Dict[str, Any]:
-    """Intenta varios métodos de extracción y devuelve el primero que funcione."""
+    """Intenta varios métodos de extracción y devuelve el primero que funcione.
+    yt-dlp va primero: pytubefix (cliente WEB) ahora devuelve URLs SABR que un <audio>
+    no puede reproducir (googlevideo responde 'sabr.malformed_config' en formato UMP)."""
     errors = []
+    try:
+        src = _extract_audio_ytdlp(video_id)
+        print(f"[AUDIO] {video_id} | método: yt-dlp OK")
+        return src
+    except Exception as e:
+        print(f"[AUDIO] {video_id} | yt-dlp falló: {e}")
+        errors.append(f"yt-dlp: {e}")
     if PYTUBEFIX_AVAILABLE:
         try:
             src = _extract_audio_pytubefix(video_id)
@@ -1216,23 +1286,179 @@ def _extract_audio(video_id: str) -> Dict[str, Any]:
         except Exception as e:
             print(f"[AUDIO] {video_id} | pytubefix falló: {e}")
             errors.append(f"pytubefix: {e}")
-    try:
-        src = _extract_audio_ytdlp(video_id)
-        print(f"[AUDIO] {video_id} | método: yt-dlp OK")
-        return src
-    except Exception as e:
-        errors.append(f"yt-dlp: {e}")
     raise Exception(" | ".join(errors) or "sin método de extracción")
+
+_audio_inflight: Dict[str, "asyncio.Future[Dict[str, Any]]"] = {}
 
 async def _get_audio_source(video_id: str) -> Dict[str, Any]:
     async with _audio_cache_lock:
         cached = _audio_cache.get(video_id)
         if cached and time.time() - cached["timestamp"] < 18000:  # ~5h (las URLs expiran)
             return cached
-    src = await asyncio.to_thread(_extract_audio, video_id)
+        # Una sola extracción por id a la vez (p. ej. precarga + reproducción simultáneas)
+        fut = _audio_inflight.get(video_id)
+        if fut is None:
+            fut = asyncio.ensure_future(asyncio.to_thread(_extract_audio, video_id))
+            _audio_inflight[video_id] = fut
+    try:
+        src = await fut
+    finally:
+        async with _audio_cache_lock:
+            _audio_inflight.pop(video_id, None)
     async with _audio_cache_lock:
         _audio_cache[video_id] = src
+        # Cache acotada: descartar las entradas más viejas
+        if len(_audio_cache) > 300:
+            for k, _ in sorted(_audio_cache.items(), key=lambda kv: kv[1]["timestamp"])[:50]:
+                _audio_cache.pop(k, None)
     return src
+
+# ---- Cache de audio EN DISCO ----
+# YouTube obliga a esperar ~5 s (+ ~3 s de extracción) antes de servir CADA canción nueva,
+# y eso no se puede saltar. Así que la primera vez que suena una canción la guardamos en
+# disco (~3 MB): desde entonces carga al instante para cualquier persona de la oficina.
+# LRU por tamaño: AUDIO_CACHE_MAX_MB (0 = desactivada). Carpeta: media/audio (ignorada en git).
+AUDIO_CACHE_DIR = os.path.join(MEDIA_DIR, "audio")
+AUDIO_CACHE_MAX_BYTES = int(os.getenv("AUDIO_CACHE_MAX_MB", "4000")) * 1024 * 1024
+os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
+_VIDEO_ID_RE = re.compile(r"^[\w-]{11}$")
+_AUDIO_MIME = {"m4a": "audio/mp4", "mp4": "audio/mp4", "webm": "audio/webm"}
+_downloads: Dict[str, "asyncio.Task[None]"] = {}
+_download_sem = asyncio.Semaphore(2)  # suave con YouTube: máx. 2 descargas a la vez
+
+def _cached_audio_file(video_id: str) -> Optional[str]:
+    if not _VIDEO_ID_RE.match(video_id):
+        return None
+    for ext in _AUDIO_MIME:
+        p = os.path.join(AUDIO_CACHE_DIR, f"{video_id}.{ext}")
+        if os.path.isfile(p):
+            return p
+    return None
+
+def _evict_audio_cache() -> None:
+    """Borra lo menos escuchado recientemente (mtime) hasta quedar bajo el 90% del límite."""
+    try:
+        files = []
+        for name in os.listdir(AUDIO_CACHE_DIR):
+            if name.endswith(".part"):
+                continue
+            p = os.path.join(AUDIO_CACHE_DIR, name)
+            st = os.stat(p)
+            files.append((st.st_mtime, st.st_size, p))
+        total = sum(f[1] for f in files)
+        if total <= AUDIO_CACHE_MAX_BYTES:
+            return
+        for _, size, p in sorted(files):
+            if total <= AUDIO_CACHE_MAX_BYTES * 0.9:
+                break
+            os.remove(p)
+            total -= size
+    except Exception as e:
+        print(f"[AUDIO-CACHE] error al limpiar: {e}")
+
+async def _download_audio_to_cache(video_id: str) -> None:
+    import httpx
+    async with _download_sem:
+        if _cached_audio_file(video_id):
+            return
+        src = await _get_audio_source(video_id)
+        ext = src.get("ext") if src.get("ext") in _AUDIO_MIME else "m4a"
+        final = os.path.join(AUDIO_CACHE_DIR, f"{video_id}.{ext}")
+        tmp = final + ".part"
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0), follow_redirects=True) as client:
+                start, total = 0, None
+                with open(tmp, "wb") as f:
+                    while total is None or start < total:
+                        end = start + AUDIO_CHUNK - 1
+                        r = await client.get(src["stream_url"], headers={**src["headers"], "Range": f"bytes={start}-{end}"})
+                        r.raise_for_status()
+                        if "vnd.yt-ump" in r.headers.get("content-type", ""):
+                            raise Exception("stream SABR/UMP no reproducible")
+                        if not r.content:
+                            break
+                        cr = r.headers.get("content-range", "")  # "bytes 0-1048575/2804967"
+                        total = int(cr.rsplit("/", 1)[1]) if "/" in cr and not cr.endswith("*") else start + len(r.content)
+                        f.write(r.content)
+                        start += len(r.content)
+            os.replace(tmp, final)
+            print(f"[AUDIO-CACHE] {video_id} guardado ({start // 1024} KB)")
+            _evict_audio_cache()
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+
+def _ensure_audio_download(video_id: str) -> None:
+    """Lanza (una sola vez por id) la descarga a disco en segundo plano."""
+    if AUDIO_CACHE_MAX_BYTES <= 0 or not _VIDEO_ID_RE.match(video_id):
+        return
+    if video_id in _downloads or _cached_audio_file(video_id):
+        return
+    async def run():
+        try:
+            await _download_audio_to_cache(video_id)
+        except Exception as e:
+            print(f"[AUDIO-CACHE] {video_id} no se pudo guardar: {e}")
+        finally:
+            _downloads.pop(video_id, None)
+    _downloads[video_id] = asyncio.create_task(run())
+
+def _serve_cached_audio(request: Request, path: str):
+    """Sirve un archivo de la cache con soporte de Range (Starlette 0.35 no lo trae)."""
+    size = os.path.getsize(path)
+    ctype = _AUDIO_MIME.get(path.rsplit(".", 1)[-1], "audio/mp4")
+    try:
+        os.utime(path, None)  # LRU: marcar como usado recientemente
+    except OSError:
+        pass
+    headers = {"Accept-Ranges": "bytes", "Cache-Control": "private, max-age=86400"}
+    m = re.match(r"bytes=(\d*)-(\d*)$", (request.headers.get("range") or "").strip())
+    if not m or (not m.group(1) and not m.group(2)):
+        headers["Content-Length"] = str(size)
+        return FileResponse(path, media_type=ctype, headers=headers)
+    if m.group(1):
+        start = int(m.group(1))
+        end = int(m.group(2)) if m.group(2) else size - 1
+    else:  # sufijo: "bytes=-500" = los últimos 500 bytes
+        start, end = max(0, size - int(m.group(2))), size - 1
+    end = min(end, size - 1)
+    if start >= size or start > end:
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+    headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    headers["Content-Length"] = str(end - start + 1)
+    return StreamingResponse(ranged_stream(path, start, end), status_code=206, media_type=ctype, headers=headers)
+
+@app.get("/audio/{video_id}/prefetch")
+async def audio_prefetch(video_id: str):
+    """Deja lista la canción (extracción + descarga a disco en segundo plano). La usa el
+    frontend para las PRÓXIMAS canciones y, con un tiempo límite corto, para saber si una
+    canción ya está en disco (respuesta inmediata -> se reproduce directo, sin esperas)."""
+    if _cached_audio_file(video_id):
+        return {"ok": True, "cached": True}
+    if not AUDIO_PROXY_ENABLED:
+        return JSONResponse({"ok": False, "reason": "disabled"}, status_code=503)
+    try:
+        await _get_audio_source(video_id)
+    except Exception as e:
+        return JSONResponse({"ok": False, "reason": str(e)[:200]}, status_code=502)
+    _ensure_audio_download(video_id)
+    return {"ok": True, "cached": False}
+
+# Pedimos a googlevideo trozos acotados (como hace yt-dlp, http_chunk_size=10 MB) en vez
+# del rango abierto "bytes=0-" que manda <audio>: la respuesta 206 trae Content-Range con
+# el total y el navegador pide el siguiente trozo por su cuenta. Evita descargas enormes
+# de una sola vez (mixes de horas) y los cortes de googlevideo con peticiones muy largas.
+AUDIO_CHUNK = 10 * 1024 * 1024
+_RANGE_RE = re.compile(r"bytes=(\d+)-(\d*)$")
+
+def _bounded_range(range_header: Optional[str]) -> str:
+    m = _RANGE_RE.match((range_header or "bytes=0-").strip())
+    if not m:
+        return range_header or f"bytes=0-{AUDIO_CHUNK - 1}"  # p. ej. sufijo "bytes=-500": tal cual
+    start = int(m.group(1))
+    end = int(m.group(2)) if m.group(2) else start + AUDIO_CHUNK - 1
+    end = min(end, start + AUDIO_CHUNK - 1)
+    return f"bytes={start}-{end}"
 
 @app.api_route("/audio/{video_id}", methods=["GET", "HEAD"])
 async def audio_proxy(request: Request, video_id: str):
@@ -1240,21 +1466,31 @@ async def audio_proxy(request: Request, video_id: str):
     reenvía los bytes con los headers correctos + soporte de Range. Lo usa el
     HtmlAudioEngine del frontend (background fiable + espectro real)."""
     import httpx
+    cached = _cached_audio_file(video_id)
+    if cached:
+        return _serve_cached_audio(request, cached)  # ya en disco: instantáneo
+    if not AUDIO_PROXY_ENABLED:
+        return JSONResponse({"error": "Proxy de audio desactivado (AUDIO_PROXY=off)"}, status_code=503)
     try:
         src = await _get_audio_source(video_id)
     except Exception as e:
         return JSONResponse({"error": f"No se pudo extraer el audio: {e}"}, status_code=502)
+    # Mientras la servimos desde YouTube, guardarla en disco para la próxima vez
+    _ensure_audio_download(video_id)
 
     fwd = dict(src["headers"])  # incluye el User-Agent del cliente android
-    range_header = request.headers.get("range")
-    if range_header:
-        fwd["Range"] = range_header
+    fwd["Range"] = _bounded_range(request.headers.get("range"))
 
     client = httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0), follow_redirects=True)
     try:
         req = client.build_request("GET", src["stream_url"], headers=fwd)
         upstream = await client.send(req, stream=True)
         upstream.raise_for_status()
+        # Un 200 con 'application/vnd.yt-ump' es un error SABR de YouTube, no audio:
+        # tratarlo como fallo para que el cliente caiga al iframe en vez de colgarse.
+        if "vnd.yt-ump" in upstream.headers.get("content-type", ""):
+            await upstream.aclose()
+            raise Exception("YouTube devolvió un stream SABR/UMP no reproducible")
     except Exception as e:
         await client.aclose()
         # La URL pudo expirar/fallar: invalidar cache para reintentar limpio
@@ -1501,6 +1737,7 @@ async def api_list_rooms():
             "is_public": r.get("is_public", True),
             "requires_password": (not r.get("is_public", True)) and bool(r.get("password_hash")),
             "queue": r.get("queue", []),
+            **_room_live_info(r.get("id"), r.get("is_public", True)),
         }
         for r in all_rooms.values()
     ]
@@ -1524,13 +1761,17 @@ async def api_create_room(
 
     room = await get_or_create_room(room_id, user_id, is_public, password_hash)
     room.name = name
+    # Token secreto del dueño: solo viaja en esta respuesta; en disco guardamos su hash.
+    owner_token = secrets.token_urlsafe(24)
+    room.owner_token_hash = _hash_owner_token(owner_token)
     await save_room_state(room)
 
     return {
         "room_id": room_id,
         "name": name,
         "is_public": is_public,
-        "requires_password": not is_public and password_hash is not None
+        "requires_password": not is_public and password_hash is not None,
+        "owner_token": owner_token,
     }
 
 @app.post("/api/rooms/{room_id}/join")
@@ -1617,12 +1858,16 @@ async def api_get_room(room_id: str):
 @app.get("/api/rooms/{room_id}/queue")
 async def api_get_room_queue(room_id: str):
     """Obtiene solo la cola de una room específica"""
+    # Un GET no debe crear salas fantasma (antes cualquier id creaba y persistía una sala).
+    if room_id != "default" and room_id not in rooms_read():
+        return JSONResponse({"error": "Room no encontrada"}, status_code=404)
     room = await get_or_create_room(room_id)
     return await room.get_queue_detailed()
 
 @app.delete("/api/rooms/{room_id}")
-async def api_delete_room(room_id: str, user_id: str = Body(...)):
-    """Elimina una room (solo el creador puede eliminarla)"""
+async def api_delete_room(room_id: str, owner_token: str = Body("", embed=True)):
+    """Elimina una room. Requiere el owner_token que recibió el creador al crearla
+    (el user_id no sirve: es público, viaja en la presencia y en /api/rooms)."""
     # No permitir eliminar la room default
     if room_id == "default":
         return JSONResponse({"error": "No se puede eliminar la room por defecto"}, status_code=403)
@@ -1631,11 +1876,9 @@ async def api_delete_room(room_id: str, user_id: str = Body(...)):
     if room_id not in all_rooms:
         return JSONResponse({"error": "Room no encontrada"}, status_code=404)
 
-    room_data = all_rooms[room_id]
-    created_by = room_data.get("created_by")
-
-    # Verificar que el usuario sea el creador
-    if created_by != user_id:
+    stored_hash = all_rooms[room_id].get("owner_token_hash")
+    # Salas antiguas sin owner_token_hash: nadie puede borrarlas por API (antes cualquiera podía).
+    if not stored_hash or not owner_token or not hmac.compare_digest(_hash_owner_token(owner_token), stored_hash):
         return JSONResponse({"error": "Solo el creador puede eliminar esta room"}, status_code=403)
 
     # Eliminar la room de memoria y del archivo
@@ -1646,7 +1889,7 @@ async def api_delete_room(room_id: str, user_id: str = Body(...)):
             for ws in list(room.connections):
                 try:
                     await ws.send_json({"type": "room_deleted", "data": {"message": "Esta room ha sido eliminada"}})
-                    await ws.close()
+                    await ws.close(code=4404)
                 except:
                     pass
             del rooms[room_id]
@@ -1674,9 +1917,11 @@ async def ws_room_endpoint(ws: WebSocket, room_id: str):
 
     # Verificar acceso a la room
     all_rooms = rooms_read()
+    # Códigos de cierre propios (4xxx): le dicen al cliente que NO reintente la conexión.
+    #   4404 = la sala no existe · 4403 = acceso denegado (sala privada sin token válido)
     if room_id not in all_rooms:
-        await ws.send_json({"type":"room_not_found","data":{"message":"Room no encontrada, redirigiendo a default..."}})
-        await ws.close()
+        await ws.send_json({"type":"room_not_found","data":{"message":"Room no encontrada"}})
+        await ws.close(code=4404)
         return
 
     room_data = all_rooms[room_id]
@@ -1688,23 +1933,23 @@ async def ws_room_endpoint(ws: WebSocket, room_id: str):
     if not is_public:
         if not session_token:
             print(f"[WS] Rechazado: room privada sin token")
-            await ws.send_json({"type":"error","data":{"message":"Token de sesión requerido para room privada"}})
-            await ws.close()
+            await ws.send_json({"type":"access_denied","data":{"message":"Token de sesión requerido para room privada"}})
+            await ws.close(code=4403)
             return
 
         # Validar token
         sessions = sessions_read()
         if session_token not in sessions:
             print(f"[WS] Rechazado: token inválido")
-            await ws.send_json({"type":"error","data":{"message":"Token de sesión inválido"}})
-            await ws.close()
+            await ws.send_json({"type":"access_denied","data":{"message":"Token de sesión inválido"}})
+            await ws.close(code=4403)
             return
 
         # Verificar que el token sea para esta room
         if sessions[session_token].get("room_id") != room_id:
             print(f"[WS] Rechazado: token para otra room")
-            await ws.send_json({"type":"error","data":{"message":"Token no válido para esta room"}})
-            await ws.close()
+            await ws.send_json({"type":"access_denied","data":{"message":"Token no válido para esta room"}})
+            await ws.close(code=4403)
             return
 
     print(f"[WS] Conexión aceptada a room {room_id}")
@@ -1712,7 +1957,12 @@ async def ws_room_endpoint(ws: WebSocket, room_id: str):
     # Obtener o crear la room
     room = await get_or_create_room(room_id)
     room.connections.add(ws)
-    room.members[ws] = ws.query_params.get("user_id") or f"anon-{id(ws)}"
+    # Con sesión iniciada (token) usamos la cuenta: id estable + nombre visible en la sala
+    account = accounts.user_from_token(ws.query_params.get("token"))
+    member_id = account["id"] if account else (ws.query_params.get("user_id") or f"anon-{id(ws)}")
+    room.members[ws] = member_id
+    if account:
+        room.names[member_id] = account["display_name"]
     await room_broadcast_presence(room)
 
     try:
@@ -1832,6 +2082,11 @@ async def ws_room_endpoint(ws: WebSocket, room_id: str):
                 }})
 
     except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        # Mensaje malformado u otro error: no dejar al cliente como oyente fantasma.
+        print(f"[WS] Conexión cerrada por error en room {room_id}: {e}")
+    finally:
         room.connections.discard(ws)
         room.members.pop(ws, None)
         await room_broadcast_presence(room)

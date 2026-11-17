@@ -14,6 +14,8 @@ export interface Playlist {
   name: string
   tracks: Track[]
   createdAt: number
+  /** Última modificación (resuelve conflictos al sincronizar entre dispositivos). */
+  updatedAt?: number
   cover?: string
 }
 

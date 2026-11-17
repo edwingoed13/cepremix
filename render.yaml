@@ -13,6 +13,11 @@ services:
     envVars:
       - key: STREAMING_MODE
         value: direct
+      # YouTube bloquea la extracción desde IPs de datacenter (Render): /audio falla
+      # siempre con 429/502. "off" hace que falle al instante y el cliente use el iframe
+      # sin esperar ~20 s. Ponlo en "on" si algún día usas un proxy residencial.
+      - key: AUDIO_PROXY
+        value: "off"
       # Configura tu propia clave en el dashboard de Render (no la subas al repo).
       - key: YOUTUBE_API_KEY
         sync: false

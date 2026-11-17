@@ -95,7 +95,31 @@ export class HtmlAudioEngine implements PlaybackEngine {
     this.audio.load()
   }
 
-  play(): void {
+  /**
+   * Carga el audio "en segundo plano" (sin reproducir) y resuelve cuando ya se puede
+   * reproducir sin cortes. Lo usa el arranque en caliente: suena el iframe mientras
+   * tanto y luego se pasa a este motor en el mismo segundo.
+   */
+  prepare(videoId: string, timeoutMs = 20000): Promise<void> {
+    const a = this.audio
+    return new Promise((resolve, reject) => {
+      const finish = (ok: boolean): void => {
+        a.removeEventListener('canplay', onReady)
+        a.removeEventListener('error', onFail)
+        window.clearTimeout(timer)
+        if (ok) resolve()
+        else reject(new Error('audio no disponible'))
+      }
+      const onReady = (): void => finish(true)
+      const onFail = (): void => finish(false)
+      a.addEventListener('canplay', onReady)
+      a.addEventListener('error', onFail)
+      const timer = window.setTimeout(() => finish(false), timeoutMs)
+      void this.load(videoId)
+    })
+  }
+
+  private beforePlay(): void {
     // Flag leído dinámicamente: activar "Espectro real" surte efecto en la siguiente
     // reproducción sin recargar. Solo entonces enrutamos por Web Audio (lo que puede
     // afectar el background); si no, el <audio> reproduce directo (background fiable).
@@ -103,7 +127,39 @@ export class HtmlAudioEngine implements PlaybackEngine {
       this.ensureGraph()
       if (this.ctx && this.ctx.state !== 'running') void this.ctx.resume()
     }
-    void this.audio.play().catch(() => this.emit('error', 'Reproducción rechazada por el navegador'))
+  }
+
+  /** Intenta reproducir y dice si lo logró (sin emitir errores). Lo usa el relevo
+   *  iframe -> <audio>: si el navegador lo bloquea (p. ej. iOS fuera de un toque),
+   *  se sigue con el iframe en vez de cortar la música. */
+  tryPlay(): Promise<boolean> {
+    this.beforePlay()
+    return this.audio.play().then(
+      () => true,
+      () => false,
+    )
+  }
+
+  play(): void {
+    this.beforePlay()
+    void this.audio.play().catch((err: unknown) => {
+      const name = (err as { name?: string } | null)?.name
+      // AbortError: un load() nuevo interrumpió este play (cambio rápido de canción,
+      // sincronización de sala). No es un fallo del motor.
+      if (name === 'AbortError') return
+      // NotAllowedError: el navegador exige un gesto (autoplay). El motor funciona:
+      // en primer plano mostramos "pausado" para que el usuario toque play; en segundo
+      // plano no emitimos nada (el player reintenta al volver a la app). Antes esto
+      // contaba como error y cambiaba al iframe de YouTube, que SÍ se pausa en background.
+      if (name === 'NotAllowedError') {
+        if (!document.hidden) this.emit('status', 'paused')
+        return
+      }
+      // Fuente no reproducible (p. ej. /audio respondió 502): el evento 'error' del
+      // elemento ya dispara el fallback; aquí no duplicamos.
+      if (name === 'NotSupportedError') return
+      this.emit('error', 'Reproducción rechazada por el navegador')
+    })
   }
 
   pause(): void {

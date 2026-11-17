@@ -1,18 +1,24 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Crown, User } from 'lucide-vue-next'
+import { colorFor, initials } from '@/shared/lib/identity'
 
-const props = defineProps<{ members: string[]; hostId: string | null; selfId: string }>()
+const props = defineProps<{
+  members: string[]
+  hostId: string | null
+  selfId: string
+  /** id -> nombre visible (solo quienes tienen cuenta) */
+  names?: Record<string, string>
+}>()
 
 const MAX = 6
 const shown = computed(() => props.members.slice(0, MAX))
 const extra = computed(() => Math.max(0, props.members.length - MAX))
 
-/** Color estable derivado del user_id (avatares anónimos pero distinguibles). */
-function colorFor(id: string): string {
-  let h = 0
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) % 360
-  return `hsl(${h} 60% 52%)`
+function label(id: string): string {
+  const name = props.names?.[id]
+  const who = id === props.selfId ? `${name ?? 'Tú'} (tú)` : (name ?? 'Oyente sin cuenta')
+  return id === props.hostId ? `${who} · host` : who
 }
 </script>
 
@@ -24,9 +30,11 @@ function colorFor(id: string): string {
       class="av"
       :class="{ self: m === selfId }"
       :style="{ background: colorFor(m), zIndex: shown.length - i }"
-      :title="m === selfId ? 'Tú' : 'Oyente'"
+      :title="label(m)"
+      :aria-label="label(m)"
     >
-      <User :size="14" />
+      <span v-if="names?.[m]" class="ini">{{ initials(names[m] as string) }}</span>
+      <User v-else :size="14" />
       <span v-if="m === hostId" class="crown" title="Host"><Crown :size="10" /></span>
     </div>
     <div v-if="extra > 0" class="more">+{{ extra }}</div>
@@ -55,6 +63,11 @@ function colorFor(id: string): string {
 .av.self {
   box-shadow: 0 0 0 2px var(--accent);
 }
+.ini {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
 .crown {
   position: absolute;
   top: -6px;
@@ -63,7 +76,7 @@ function colorFor(id: string): string {
   height: 16px;
   border-radius: 50%;
   background: var(--bg);
-  color: #ffcf4d;
+  color: var(--gold);
   display: grid;
   place-items: center;
 }

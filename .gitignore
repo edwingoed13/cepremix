@@ -107,3 +107,9 @@ desktop.ini
 *.swp
 *.swo
 *.orig
+
+# Base de datos de cuentas y bibliotecas (datos reales del personal)
+cepremix.db*
+
+# Registros del servidor de oficina
+logs/

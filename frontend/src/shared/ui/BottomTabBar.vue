@@ -1,26 +1,33 @@
 <script setup lang="ts">
 import { RouterLink } from 'vue-router'
-import { Home, Search, Library, User } from 'lucide-vue-next'
+import { Home, Search, Radio, Library } from 'lucide-vue-next'
+import { useRoomStore } from '@/features/rooms/room.store'
 
+const room = useRoomStore()
 const tabs = [
-  { to: '/', label: 'Inicio', icon: Home },
+  { to: '/', label: 'Inicio', icon: Home, exact: true },
   { to: '/search', label: 'Buscar', icon: Search },
+  { to: '/rooms', label: 'Salas', icon: Radio, rooms: true },
   { to: '/library', label: 'Biblioteca', icon: Library },
-  { to: '/settings', label: 'Perfil', icon: User },
 ]
 </script>
 
 <template>
-  <nav class="tabbar">
+  <nav class="tabbar" aria-label="Navegación principal">
     <RouterLink
       v-for="t in tabs"
       :key="t.to"
-      :to="t.to"
+      :to="t.rooms && room.active && room.roomId ? `/room/${room.roomId}` : t.to"
       class="tab"
-      active-class="tab--active"
+      :class="{ 'tab--active': t.rooms && $route.path.startsWith('/room') }"
+      :active-class="t.exact ? '' : 'tab--active'"
+      :exact-active-class="t.exact ? 'tab--active' : ''"
       :aria-label="t.label"
     >
-      <component :is="t.icon" :size="22" :stroke-width="2" />
+      <span class="ic">
+        <component :is="t.icon" :size="24" :stroke-width="2" />
+        <span v-if="t.rooms && room.active" class="live-dot green badge" />
+      </span>
       <span class="label">{{ t.label }}</span>
     </RouterLink>
   </nav>
@@ -34,12 +41,14 @@ const tabs = [
   bottom: 0;
   z-index: 40;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+  padding-top: 6px;
   padding-bottom: env(safe-area-inset-bottom);
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: blur(18px);
-  border-top: 1px solid var(--border);
+  /* Vidrio esmerilado (Apple Music) sobre un desvanecido (Spotify) */
+  background: linear-gradient(to top, var(--bg) 35%, color-mix(in srgb, var(--bg) 70%, transparent));
+  backdrop-filter: blur(20px) saturate(1.6);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
 }
 .tab {
   flex: 1;
@@ -49,15 +58,31 @@ const tabs = [
   gap: 3px;
   color: var(--text-muted);
   text-decoration: none;
-  font-size: 11px;
-  font-weight: 500;
-  padding: 8px 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 4px 0;
   transition: color 0.15s ease;
 }
+.ic {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+.badge {
+  position: absolute;
+  top: -1px;
+  right: -4px;
+  width: 9px;
+  height: 9px;
+  box-shadow: 0 0 0 2px var(--bg);
+}
 .tab--active {
+  color: var(--text);
+}
+.tab--active .ic {
   color: var(--accent);
 }
 .tab:active {
-  transform: scale(0.94);
+  transform: scale(0.92);
 }
 </style>

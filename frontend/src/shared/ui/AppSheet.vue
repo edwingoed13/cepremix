@@ -1,13 +1,58 @@
 <script setup lang="ts">
-defineProps<{ open: boolean; title?: string }>()
+import { ref, watch, onBeforeUnmount } from 'vue'
+
+const props = defineProps<{ open: boolean; title?: string }>()
 const emit = defineEmits<{ close: [] }>()
+
+/*
+ * Teclado en móvil: Chrome Android (y Safari iOS) NO mueven los elementos fijos al abrir
+ * el teclado: solo encogen el "visual viewport". Medimos cuánto tapa el teclado y subimos
+ * la hoja esa altura, para que los botones (Crear / Aceptar) queden siempre visibles.
+ */
+const kb = ref(0) // px que tapa el teclado
+const vvHeight = ref<number | null>(null)
+
+function measure(): void {
+  const vv = window.visualViewport
+  if (!vv) return
+  kb.value = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop))
+  vvHeight.value = vv.height
+}
+function listen(on: boolean): void {
+  const vv = window.visualViewport
+  if (!vv) return
+  const fn = on ? vv.addEventListener.bind(vv) : vv.removeEventListener.bind(vv)
+  fn('resize', measure)
+  fn('scroll', measure)
+}
+watch(
+  () => props.open,
+  (open) => {
+    listen(open)
+    if (open) measure()
+    else kb.value = 0
+  },
+  { immediate: true },
+)
+onBeforeUnmount(() => listen(false))
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="sheet">
-      <div v-if="open" class="overlay" @click.self="emit('close')">
-        <div class="sheet" role="dialog" aria-modal="true">
+      <div
+        v-if="open"
+        class="overlay"
+        :style="kb ? { paddingBottom: kb + 'px' } : undefined"
+        @click.self="emit('close')"
+      >
+        <div
+          class="sheet"
+          :class="{ 'kb-open': kb > 0 }"
+          role="dialog"
+          aria-modal="true"
+          :style="kb && vvHeight ? { maxHeight: vvHeight - 16 + 'px' } : undefined"
+        >
           <div class="grip" />
           <h3 v-if="title" class="title">{{ title }}</h3>
           <div class="body"><slot /></div>
@@ -34,6 +79,14 @@ const emit = defineEmits<{ close: [] }>()
   padding: var(--space-3) var(--space-4) calc(env(safe-area-inset-bottom) + var(--space-6));
   max-height: 80dvh;
   overflow-y: auto;
+  transition: max-height 0.15s ease;
+}
+/* Con el teclado abierto la hoja queda pegada a él: sobra el margen de la barra de gestos */
+.sheet.kb-open {
+  padding-bottom: var(--space-4);
+}
+.overlay {
+  transition: padding-bottom 0.15s ease;
 }
 .grip {
   width: 40px;
@@ -62,5 +115,33 @@ const emit = defineEmits<{ close: [] }>()
 .sheet-enter-from .sheet,
 .sheet-leave-to .sheet {
   transform: translateY(100%);
+}
+.overlay {
+  backdrop-filter: blur(4px);
+}
+.sheet {
+  border: 1px solid var(--border);
+  border-bottom: 0;
+}
+/* Desktop: diálogo centrado en vez de hoja inferior */
+@media (min-width: 1024px) {
+  .overlay {
+    align-items: center;
+    justify-content: center;
+  }
+  .sheet {
+    width: 420px;
+    border-radius: var(--radius-lg);
+    border-bottom: 1px solid var(--border);
+    padding: var(--space-6);
+    box-shadow: var(--shadow-2);
+  }
+  .grip {
+    display: none;
+  }
+  .sheet-enter-from .sheet,
+  .sheet-leave-to .sheet {
+    transform: scale(0.96);
+  }
 }
 </style>
