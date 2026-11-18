@@ -9,3 +9,4 @@ ffmpeg-python>=0.2.0
 bcrypt>=4.1.0
 python-multipart>=0.0.6
 httpx>=0.24.0
+pyjwt[crypto]>=2.8  # verificar el JWT de Cloudflare Access (crear salas desde internet)

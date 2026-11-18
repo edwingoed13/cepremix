@@ -798,12 +798,50 @@ app = FastAPI(title="Music Realtime FastAPI", lifespan=lifespan)
 accounts.init_db()
 app.include_router(accounts.router)  # /api/auth/*, /api/me/library (antes del catch-all del SPA)
 
+def _is_proxied(request: Request) -> bool:
+    """True si la petición llegó por un proxy (Cloudflare Tunnel = desde internet).
+    Ojo: con el túnel TODO llega desde 127.0.0.1 (cloudflared corre en esta PC), así que
+    hay que mirar las cabeceras de proxy, no la IP."""
+    return any(h in request.headers for h in ("cf-connecting-ip", "cf-ray", "x-forwarded-for", "forwarded"))
+
 def _is_local_request(request: Request) -> bool:
-    """True solo si la petición sale de la propia PC del servidor (no de la red ni de internet).
-    Ojo: con Cloudflare Tunnel TODO llega desde 127.0.0.1 (cloudflared corre en esta PC),
-    así que una petición que trae cabeceras de proxy viene de fuera aunque parezca local."""
-    proxied = any(h in request.headers for h in ("cf-connecting-ip", "cf-ray", "x-forwarded-for", "forwarded"))
-    return not proxied and (request.client.host if request.client else "") in ("127.0.0.1", "::1", "localhost")
+    """True solo si la petición sale de la propia PC del servidor (no de la red ni de internet)."""
+    return not _is_proxied(request) and (request.client.host if request.client else "") in ("127.0.0.1", "::1", "localhost")
+
+# ---- Cloudflare Access: solo para CREAR salas desde internet ----
+# La app es pública; crear una sala exige haber pasado por Cloudflare Access (código por
+# correo). Access protege la ruta /acceso/* y añade un JWT firmado (cabecera
+# Cf-Access-Jwt-Assertion / cookie CF_Authorization) que aquí VERIFICAMOS con las claves
+# públicas del equipo: no basta con que la cabecera exista (podría falsificarse).
+CF_ACCESS_TEAM = os.getenv("CF_ACCESS_TEAM", "").strip()  # p. ej. "bold-dawn-12c7"
+CF_ACCESS_AUD = os.getenv("CF_ACCESS_AUD", "").strip()    # opcional: "Application Audience (AUD) Tag"
+_cf_jwks = None
+
+def _cf_access_identity(request: Request) -> Optional[Dict[str, Any]]:
+    """Claims del JWT de Access si es válido (firma, emisor, caducidad y, si se configuró, AUD)."""
+    token = request.headers.get("cf-access-jwt-assertion") or request.cookies.get("CF_Authorization")
+    if not token or not CF_ACCESS_TEAM:
+        return None
+    import jwt  # PyJWT[crypto]
+    global _cf_jwks
+    issuer = f"https://{CF_ACCESS_TEAM}.cloudflareaccess.com"
+    try:
+        if _cf_jwks is None:
+            _cf_jwks = jwt.PyJWKClient(f"{issuer}/cdn-cgi/access/certs", cache_keys=True)
+        key = _cf_jwks.get_signing_key_from_jwt(token).key
+        return jwt.decode(
+            token, key, algorithms=["RS256"], issuer=issuer,
+            audience=CF_ACCESS_AUD or None, options={"verify_aud": bool(CF_ACCESS_AUD)},
+        )
+    except Exception as e:
+        print(f"[ACCESS] JWT rechazado: {e}")
+        return None
+
+async def _may_create_room(request: Request) -> bool:
+    """Red de la oficina / esta PC: siempre. Desde internet: solo con Access válido."""
+    if not _is_proxied(request):
+        return True
+    return await asyncio.to_thread(_cf_access_identity, request) is not None
 
 # Configurar CORS. Nota: allow_credentials NO puede ser True junto con allow_origins="*"
 # (los navegadores lo rechazan). La app no usa cookies, así que va en False.
@@ -1747,13 +1785,21 @@ async def api_list_rooms():
     return {"rooms": rooms_safe}
 
 @app.post("/api/rooms")
+@app.post("/acceso/api/rooms")  # misma acción bajo /acceso/*, la ruta que protege Cloudflare Access
 async def api_create_room(
+    request: Request,
     name: str = Body(...),
     user_id: Optional[str] = Body(None),
     is_public: bool = Body(True),
     password: Optional[str] = Body(None)
 ):
-    """Crea una nueva room (pública o privada con contraseña)"""
+    """Crea una nueva room (pública o privada con contraseña).
+    Desde internet exige Cloudflare Access (ver _may_create_room)."""
+    if not await _may_create_room(request):
+        return JSONResponse(
+            {"error": "access_required", "message": "Verifica tu correo para crear salas"},
+            status_code=403,
+        )
     import uuid
     room_id = str(uuid.uuid4())[:8]
 

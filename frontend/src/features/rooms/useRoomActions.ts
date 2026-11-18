@@ -1,7 +1,13 @@
 import { useRouter } from 'vue-router'
 import { useQueryClient } from '@tanstack/vue-query'
 import { useUiStore } from '@/shared/lib/ui.store'
-import { createRoom, joinRoom, type RoomSummary } from './rooms.api'
+import {
+  AccessRequiredError,
+  accessCreateRoomUrl,
+  createRoom,
+  joinRoom,
+  type RoomSummary,
+} from './rooms.api'
 
 /** Entrar a una sala (pidiendo contraseña si es privada) y crear salas nuevas. */
 export function useRoomActions() {
@@ -34,7 +40,14 @@ export function useRoomActions() {
       const res = await createRoom(name.trim())
       void qc.invalidateQueries({ queryKey: ['rooms'] })
       await router.push({ name: 'room', params: { id: res.room_id } })
-    } catch {
+    } catch (e) {
+      if (e instanceof AccessRequiredError) {
+        // Desde internet: pantalla de Cloudflare (código por correo) y, al volver, se crea
+        // la sala sola. Navegación completa (no fetch): Access necesita mostrar su página.
+        ui.toast('Para crear salas, verifica tu correo')
+        window.location.assign(accessCreateRoomUrl(name.trim()))
+        return
+      }
       ui.toast('No se pudo crear la sala')
     }
   }

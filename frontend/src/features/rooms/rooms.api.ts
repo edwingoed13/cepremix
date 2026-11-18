@@ -1,4 +1,4 @@
-import { apiFetch } from '@/shared/lib/api'
+import { apiFetch, ApiError } from '@/shared/lib/api'
 import { useAuthStore } from '@/features/auth/auth.store'
 
 export interface RoomNowPlaying {
@@ -41,11 +41,34 @@ export function getOwnerToken(roomId: string): string | null {
   return localStorage.getItem(ownerKey(roomId))
 }
 
+/** Desde internet, crear salas exige pasar por Cloudflare Access (código por correo). */
+export class AccessRequiredError extends Error {
+  constructor() {
+    super('Verifica tu correo para crear salas')
+  }
+}
+
+/** Página protegida por Cloudflare Access que, tras el código, crea la sala y entra. */
+export function accessCreateRoomUrl(name: string): string {
+  return `/acceso/crear-sala?nombre=${encodeURIComponent(name)}`
+}
+
 export async function createRoom(name: string): Promise<{ room_id: string }> {
-  const res = await apiFetch<{ room_id: string; owner_token?: string }>('/api/rooms', {
-    method: 'POST',
-    body: JSON.stringify({ name, is_public: true, user_id: useAuthStore().uid }),
-  })
+  let res: { room_id: string; owner_token?: string }
+  try {
+    // /acceso/* es la ruta que protege Cloudflare Access. Sin sesión de Access responde
+    // con una redirección a su pantalla de login: con redirect 'manual' la detectamos
+    // (respuesta "opaqueredirect", status 0) en vez de seguirla.
+    res = await apiFetch('/acceso/api/rooms', {
+      method: 'POST',
+      redirect: 'manual',
+      body: JSON.stringify({ name, is_public: true, user_id: useAuthStore().uid }),
+    })
+  } catch (e) {
+    if (e instanceof ApiError && (e.status === 0 || (e.body as { error?: string } | null)?.error === 'access_required'))
+      throw new AccessRequiredError()
+    throw e
+  }
   if (res.owner_token) localStorage.setItem(ownerKey(res.room_id), res.owner_token)
   return res
 }

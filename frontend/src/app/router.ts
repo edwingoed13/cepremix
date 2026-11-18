@@ -11,6 +11,8 @@ export const router = createRouter({
     { path: '/library', name: 'library', component: () => import('@/pages/LibraryPage.vue') },
     { path: '/settings', name: 'settings', component: () => import('@/pages/SettingsPage.vue') },
     { path: '/login', name: 'login', component: () => import('@/pages/LoginPage.vue') },
+    // Protegida por Cloudflare Access: tras el código por correo, crea la sala y entra
+    { path: '/acceso/crear-sala', name: 'access-create-room', component: () => import('@/pages/AccessCreateRoomPage.vue') },
   ],
   scrollBehavior: () => ({ top: 0 }),
 })

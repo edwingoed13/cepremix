@@ -32,6 +32,8 @@ ENV = {
     "PORT": str(PORT),
     "AUDIO_PROXY": "on",  # IP de oficina: YouTube sí deja extraer el audio
     "KEEP_AWAKE": "1",
+    # Cloudflare Access: crear salas desde internet exige el código por correo (ruta /acceso/*)
+    "CF_ACCESS_TEAM": "bold-dawn-12c7",
     "PYTHONUNBUFFERED": "1",
     "PYTHONIOENCODING": "utf-8",
     # "REGISTRATION_CODE": "cambia-esto",  # opcional: exigir un código para crear cuentas
